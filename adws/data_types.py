@@ -107,6 +107,7 @@ class AgentPromptRequest(BaseModel):
     adw_id: str
     agent_name: str = "ops"
     model: Literal["sonnet", "opus"] = "opus"
+    provider: Literal["anthropic", "openai"] = "anthropic"
     dangerously_skip_permissions: bool = False
     output_file: str
 
@@ -127,6 +128,7 @@ class AgentTemplateRequest(BaseModel):
     args: List[str]
     adw_id: str
     model: Literal["sonnet", "opus"] = "sonnet"
+    provider: Literal["anthropic", "openai"] = "anthropic"
 
 
 class ClaudeCodeResultMessage(BaseModel):

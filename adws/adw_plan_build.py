@@ -12,18 +12,20 @@ Workflow:
 1. Fetch GitHub issue details
 2. Create feature branch: feature/issue-{number}-{slug}
 3. Plan Agent: Generate implementation plan
-   - Prompt Claude Code with issue context
+   - Prompt LLM with issue context
    - Comment plan on issue
    - Commit: "chore: add implementation plan for #{number}"
 4. Build Agent: Implement the solution
-   - Prompt Claude Code with plan + codebase context
+   - Prompt LLM with plan + codebase context
    - Comment implementation summary on issue
    - Commit: "feature: implement #{number} - {title}"
 5. Create PR with full context
 
 Environment Requirements:
-- ANTHROPIC_API_KEY: Anthropic API key
-- CLAUDE_CODE_PATH: Path to Claude CLI
+- At least one LLM provider must be enabled and configured:
+  - ANTHROPIC_ENABLED=true + ANTHROPIC_API_KEY: Uses Claude Code CLI
+  - OPENAI_ENABLED=true + OPENAI_API_KEY: Uses OpenAI API
+- CLAUDE_CODE_PATH: (Optional) Path to Claude CLI, defaults to 'claude'
 - GITHUB_PAT: (Optional) GitHub Personal Access Token - only if using a different account than 'gh auth login'
 """
 
@@ -48,6 +50,12 @@ from github import (
     get_repo_url,
 )
 from utils import make_adw_id, setup_logger
+from llm_provider import (
+    get_active_provider,
+    is_anthropic_enabled,
+    is_openai_enabled,
+    check_provider_configured,
+)
 
 # Agent name constants
 AGENT_PLANNER = "sdlc_planner"
@@ -59,24 +67,36 @@ AGENT_PR_CREATOR = "pr_creator"
 
 
 def check_env_vars(logger: Optional[logging.Logger] = None) -> None:
-    """Check that all required environment variables are set."""
-    required_vars = [
-        "ANTHROPIC_API_KEY",
-        "CLAUDE_CODE_PATH",
-    ]
-    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    """Check that required environment variables are set based on active LLM provider.
 
-    if missing_vars:
-        error_msg = "Error: Missing required environment variables:"
+    Provider-aware validation:
+    - Only requires ANTHROPIC_API_KEY if Anthropic is enabled
+    - Only requires OPENAI_API_KEY if OpenAI is enabled
+    - At least one provider must be properly configured
+    """
+    # Check LLM provider configuration
+    is_configured, provider_message = check_provider_configured()
+
+    if not is_configured:
+        error_msg = f"Error: LLM provider not configured - {provider_message}"
         if logger:
             logger.error(error_msg)
-            for var in missing_vars:
-                logger.error(f"  - {var}")
         else:
             print(error_msg, file=sys.stderr)
-            for var in missing_vars:
-                print(f"  - {var}", file=sys.stderr)
         sys.exit(1)
+
+    # Check Claude Code path only if Anthropic is the active provider
+    active_provider = get_active_provider()
+    if active_provider == "anthropic":
+        claude_path = os.getenv("CLAUDE_CODE_PATH")
+        if not claude_path:
+            # This has a default in agent.py, so just log info
+            if logger:
+                logger.info("CLAUDE_CODE_PATH not set, using default 'claude'")
+
+    # Log active provider
+    if logger:
+        logger.info(f"Active LLM provider: {active_provider}")
 
 
 def parse_args(logger: Optional[logging.Logger] = None) -> Tuple[str, Optional[str]]:

@@ -1,4 +1,9 @@
-"""Claude Code agent module for executing prompts programmatically."""
+"""Claude Code agent module for executing prompts programmatically.
+
+Supports multiple LLM providers:
+- Anthropic (via Claude Code CLI) - default when ANTHROPIC_ENABLED=true
+- OpenAI (via API) - used when OPENAI_ENABLED=true and Anthropic is disabled
+"""
 
 import subprocess
 import sys
@@ -13,6 +18,12 @@ from data_types import (
     AgentTemplateRequest,
     ClaudeCodeResultMessage,
 )
+from llm_provider import (
+    get_active_provider,
+    is_anthropic_enabled,
+    prompt_openai,
+    get_openai_model_for_claude_model,
+)
 
 # Load environment variables
 load_dotenv()
@@ -22,7 +33,15 @@ CLAUDE_PATH = os.getenv("CLAUDE_CODE_PATH", "claude")
 
 
 def check_claude_installed() -> Optional[str]:
-    """Check if Claude Code CLI is installed. Return error message if not."""
+    """Check if Claude Code CLI is installed. Return error message if not.
+
+    Only performs the check if Anthropic is enabled. If Anthropic is disabled,
+    returns None (no error) since Claude CLI is not required.
+    """
+    # Skip check if Anthropic is disabled
+    if not is_anthropic_enabled():
+        return None
+
     try:
         result = subprocess.run(
             [CLAUDE_PATH, "--version"], capture_output=True, text=True
@@ -157,20 +176,101 @@ def save_prompt(prompt: str, adw_id: str, agent_name: str = "ops") -> None:
     
     # Save prompt to file
     prompt_file = os.path.join(prompt_dir, f"{command_name}.txt")
-    with open(prompt_file, "w") as f:
+    with open(prompt_file, "w", encoding="utf-8") as f:
         f.write(prompt)
-    
+
     print(f"Saved prompt to: {prompt_file}")
 
 
-def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
-    """Execute Claude Code with the given prompt configuration."""
+def execute_prompt_openai(request: AgentPromptRequest) -> AgentPromptResponse:
+    """Execute a prompt using OpenAI API.
 
+    This is used as an alternative to Claude Code CLI when OpenAI is the active provider.
+
+    Note: OpenAI cannot execute slash commands or file operations that Claude Code CLI can.
+    This function is primarily for LLM prompt execution only.
+    """
+    # Save prompt before execution
+    save_prompt(request.prompt, request.adw_id, request.agent_name)
+
+    # Create output directory if needed
+    output_dir = os.path.dirname(request.output_file)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    # Map Claude model to OpenAI model
+    openai_model = get_openai_model_for_claude_model(request.model)
+
+    print(f"Executing prompt via OpenAI (model: {openai_model})")
+
+    # Execute via OpenAI
+    result = prompt_openai(
+        prompt=request.prompt,
+        model=openai_model,
+        max_tokens=4096,
+        temperature=0.7,
+    )
+
+    # Save output to file for consistency with Claude Code output
+    output_data = {
+        "type": "result",
+        "subtype": "success" if result["success"] else "error",
+        "is_error": not result["success"],
+        "result": result["output"],
+        "session_id": None,
+        "provider": "openai",
+        "model": openai_model,
+        "usage": result.get("usage"),
+    }
+
+    with open(request.output_file, "w", encoding="utf-8") as f:
+        f.write(json.dumps(output_data, ensure_ascii=False) + "\n")
+
+    print(f"Output saved to: {request.output_file}")
+
+    # Also create JSON file for consistency
+    json_file = request.output_file.replace('.jsonl', '.json')
+    with open(json_file, 'w', encoding="utf-8") as f:
+        json.dump([output_data], f, indent=2, ensure_ascii=False)
+    print(f"Created JSON file: {json_file}")
+
+    return AgentPromptResponse(
+        output=result["output"],
+        success=result["success"],
+        session_id=None,
+    )
+
+
+def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
+    """Execute Claude Code with the given prompt configuration.
+
+    Routes to the appropriate provider based on configuration:
+    - If provider is explicitly set, uses that provider
+    - Otherwise, uses the active provider from environment config
+    """
+    # Determine which provider to use
+    provider = request.provider
+    if provider == "anthropic":
+        # Double check if Anthropic is actually available
+        active = get_active_provider()
+        if active == "openai":
+            # Anthropic was requested but only OpenAI is available
+            print("Warning: Anthropic requested but not available, falling back to OpenAI")
+            return execute_prompt_openai(request)
+
+    elif provider == "openai":
+        return execute_prompt_openai(request)
+
+    # Default: use Anthropic (Claude Code CLI)
     # Check if Claude Code CLI is installed
     error_msg = check_claude_installed()
     if error_msg:
+        # If Claude Code CLI is not available but OpenAI is, fall back to OpenAI
+        if get_active_provider() == "openai":
+            print("Warning: Claude Code CLI not available, falling back to OpenAI")
+            return execute_prompt_openai(request)
         return AgentPromptResponse(output=error_msg, success=False, session_id=None)
-    
+
     # Save prompt before execution
     save_prompt(request.prompt, request.adw_id, request.agent_name)
 
@@ -246,10 +346,22 @@ def prompt_claude_code(request: AgentPromptRequest) -> AgentPromptResponse:
 
 
 def execute_template(request: AgentTemplateRequest) -> AgentPromptResponse:
-    """Execute a Claude Code template with slash command and arguments."""
+    """Execute a Claude Code template with slash command and arguments.
+
+    Note: Slash commands are a Claude Code CLI feature. When using OpenAI provider,
+    the slash command and args are passed as a regular prompt. OpenAI won't be able
+    to execute the actual CLI commands but can process the text.
+    """
     # Construct prompt from slash command and args
     prompt = f"{request.slash_command} {' '.join(request.args)}"
-    
+
+    # Determine provider - use template's provider or detect from environment
+    provider = request.provider
+    if provider == "anthropic":
+        active = get_active_provider()
+        if active == "openai":
+            provider = "openai"
+
     # Create output directory with adw_id at project root
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     output_dir = os.path.join(project_root, "agents", request.adw_id, request.agent_name)
@@ -264,6 +376,7 @@ def execute_template(request: AgentTemplateRequest) -> AgentPromptResponse:
         adw_id=request.adw_id,
         agent_name=request.agent_name,
         model=request.model,
+        provider=provider,
         dangerously_skip_permissions=True,
         output_file=output_file,
     )

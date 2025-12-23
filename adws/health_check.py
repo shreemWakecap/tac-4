@@ -82,7 +82,6 @@ def check_env_vars() -> CheckResult:
 
     missing_required = []
     missing_optional = []
-    provider_errors = []
 
     # Check base required vars
     for var, desc in base_required_vars.items():
@@ -93,23 +92,20 @@ def check_env_vars() -> CheckResult:
             missing_required.append(f"{var} ({desc})")
 
     # Check LLM provider configuration
-    # Claude Code CLI always requires Anthropic API key
-    if not anthropic_key:
-        missing_required.append("ANTHROPIC_API_KEY (Anthropic API Key for Claude Code CLI - required)")
-
-    # Check provider-specific requirements for hooks/server LLM operations
+    # Only require API keys for enabled providers
     if anthropic_enabled and not anthropic_key:
-        provider_errors.append("ANTHROPIC_ENABLED=true but ANTHROPIC_API_KEY is not set")
+        missing_required.append("ANTHROPIC_API_KEY (Anthropic API Key - required when ANTHROPIC_ENABLED=true)")
 
+    # Check provider-specific requirements
     if openai_enabled and not openai_key:
-        provider_errors.append("OPENAI_ENABLED=true but OPENAI_API_KEY is not set")
+        missing_required.append("OPENAI_API_KEY (OpenAI API Key - required when OPENAI_ENABLED=true)")
 
     # Validate at least one provider is properly configured for LLM operations
     anthropic_configured = anthropic_enabled and anthropic_key
     openai_configured = openai_enabled and openai_key
 
     if not anthropic_configured and not openai_configured:
-        provider_errors.append("No LLM provider configured. Enable at least one provider with its API key.")
+        missing_required.append("No LLM provider configured. Enable at least one provider with its API key.")
 
     # Check optional vars
     for var, desc in optional_vars.items():
@@ -117,7 +113,7 @@ def check_env_vars() -> CheckResult:
             missing_optional.append(f"{var} ({desc})")
 
     # Combine all errors
-    all_errors = missing_required + provider_errors
+    all_errors = missing_required
     success = len(all_errors) == 0
 
     # Determine active provider
@@ -377,6 +373,62 @@ def check_github_cli() -> CheckResult:
         )
 
 
+def check_openai() -> CheckResult:
+    """Test OpenAI API connectivity."""
+    openai_key = os.getenv("OPENAI_API_KEY")
+
+    if not openai_key:
+        return CheckResult(
+            success=False,
+            error="OPENAI_API_KEY not set",
+        )
+
+    try:
+        import urllib.request
+        import urllib.error
+
+        # Test with a simple API call to list models
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/models",
+            headers={
+                "Authorization": f"Bearer {openai_key}",
+            },
+        )
+
+        with urllib.request.urlopen(req, timeout=30) as response:
+            if response.status == 200:
+                return CheckResult(
+                    success=True,
+                    details={"api_connected": True},
+                )
+            else:
+                return CheckResult(
+                    success=False,
+                    error=f"OpenAI API returned status {response.status}",
+                )
+
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return CheckResult(
+                success=False,
+                error="OpenAI API key is invalid (401 Unauthorized)",
+            )
+        return CheckResult(
+            success=False,
+            error=f"OpenAI API error: {e.code} {e.reason}",
+        )
+    except urllib.error.URLError as e:
+        return CheckResult(
+            success=False,
+            error=f"OpenAI API connection failed: {str(e.reason)}",
+        )
+    except Exception as e:
+        return CheckResult(
+            success=False,
+            error=f"OpenAI API test error: {str(e)}",
+        )
+
+
 def run_health_check() -> HealthCheckResult:
     """Run all health checks and return results."""
     result = HealthCheckResult(
@@ -415,11 +467,36 @@ def run_health_check() -> HealthCheckResult:
         if gh_check.error:
             result.warnings.append(gh_check.error)
 
-    # Skip Claude Code test - it just verifies CLI works but isn't critical for health check
-    result.checks["claude_code"] = CheckResult(
-        success=True,
-        details={"skipped": True, "reason": "Test skipped - CLI assumed functional"},
-    )
+    # Get provider enable flags
+    anthropic_enabled = os.getenv("ANTHROPIC_ENABLED", "true").lower() == "true"
+    openai_enabled = os.getenv("OPENAI_ENABLED", "false").lower() == "true"
+
+    # Check Claude Code (Anthropic) - only if enabled
+    if anthropic_enabled:
+        claude_check = check_claude_code()
+        result.checks["claude_code"] = claude_check
+        if not claude_check.success:
+            if claude_check.error:
+                result.warnings.append(claude_check.error)
+    else:
+        result.checks["claude_code"] = CheckResult(
+            success=True,
+            details={"enabled": False, "reason": "ANTHROPIC_ENABLED=false - Claude Code check disabled"},
+        )
+
+    # Check OpenAI - only if enabled
+    if openai_enabled:
+        openai_check = check_openai()
+        result.checks["openai"] = openai_check
+        if not openai_check.success:
+            result.success = False
+            if openai_check.error:
+                result.errors.append(openai_check.error)
+    else:
+        result.checks["openai"] = CheckResult(
+            success=True,
+            details={"enabled": False, "reason": "OPENAI_ENABLED=false - OpenAI check disabled"},
+        )
 
     return result
 

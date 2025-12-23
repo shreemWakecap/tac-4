@@ -138,20 +138,38 @@ def format_schema_for_prompt(schema_info: Dict[str, Any]) -> str:
 
 def generate_sql(request: QueryRequest, schema_info: Dict[str, Any]) -> str:
     """
-    Route to appropriate LLM provider based on API key availability and request preference.
-    Priority: 1) OpenAI API key exists, 2) Anthropic API key exists, 3) request.llm_provider
+    Route to appropriate LLM provider based on enable flags and API key availability.
+
+    Priority:
+    1) ANTHROPIC_ENABLED=true AND ANTHROPIC_API_KEY exists -> use Anthropic
+    2) OPENAI_ENABLED=true AND OPENAI_API_KEY exists -> use OpenAI
+    3) Fall back to request.llm_provider preference
+    4) Error if no provider is configured
     """
+    # Read provider enable flags (default Anthropic=true for backward compatibility)
+    anthropic_enabled = os.environ.get("ANTHROPIC_ENABLED", "true").lower() == "true"
+    openai_enabled = os.environ.get("OPENAI_ENABLED", "true").lower() == "true"
+
+    # Check API keys
     openai_key = os.environ.get("OPENAI_API_KEY")
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
-    
-    # Check API key availability first (OpenAI priority)
-    if openai_key:
-        return generate_sql_with_openai(request.query, schema_info)
-    elif anthropic_key:
+
+    # Priority 1: Anthropic if enabled and key exists
+    if anthropic_enabled and anthropic_key:
         return generate_sql_with_anthropic(request.query, schema_info)
-    
-    # Fall back to request preference if both keys available or neither available
-    if request.llm_provider == "openai":
+
+    # Priority 2: OpenAI if enabled and key exists
+    if openai_enabled and openai_key:
         return generate_sql_with_openai(request.query, schema_info)
-    else:
+
+    # Priority 3: Fall back to request preference if key exists
+    if request.llm_provider == "openai" and openai_key:
+        return generate_sql_with_openai(request.query, schema_info)
+    elif request.llm_provider == "anthropic" and anthropic_key:
         return generate_sql_with_anthropic(request.query, schema_info)
+
+    # Priority 4: Error if no provider is configured
+    raise ValueError(
+        "No LLM provider configured. Set ANTHROPIC_ENABLED=true with ANTHROPIC_API_KEY "
+        "or OPENAI_ENABLED=true with OPENAI_API_KEY in your environment."
+    )

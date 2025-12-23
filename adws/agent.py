@@ -83,34 +83,44 @@ def convert_jsonl_to_json(jsonl_file: str) -> str:
 
 def get_claude_env() -> Dict[str, str]:
     """Get only the required environment variables for Claude Code execution.
-    
+
     Returns a dictionary containing only the necessary environment variables
     based on .env.sample configuration.
-    
+
     Subprocess env behavior:
     - env=None → Inherits parent's environment (default)
     - env={} → Empty environment (no variables)
     - env=custom_dict → Only uses specified variables
-    
+
     So this will work with gh authentication:
     # These are equivalent:
     result = subprocess.run(cmd, capture_output=True, text=True)
     result = subprocess.run(cmd, capture_output=True, text=True, env=None)
-    
+
     But this will NOT work (no PATH, no auth):
     result = subprocess.run(cmd, capture_output=True, text=True, env={})
+
+    Note: Claude Code CLI requires ANTHROPIC_API_KEY. OpenAI vars are passed through
+    for hooks and other operations that may use OpenAI as an alternative provider.
     """
     required_env_vars = {
-        # Anthropic Configuration (required)
+        # Anthropic Configuration (required for Claude Code CLI)
         "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY"),
-        
+
+        # OpenAI Configuration (for hooks and other LLM operations)
+        "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"),
+
+        # LLM Provider Enable Flags
+        "ANTHROPIC_ENABLED": os.getenv("ANTHROPIC_ENABLED", "true"),
+        "OPENAI_ENABLED": os.getenv("OPENAI_ENABLED", "false"),
+
         # Claude Code Configuration
         "CLAUDE_CODE_PATH": os.getenv("CLAUDE_CODE_PATH", "claude"),
         "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": os.getenv("CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "true"),
-        
+
         # Agent Cloud Sandbox Environment (optional)
         "E2B_API_KEY": os.getenv("E2B_API_KEY"),
-        
+
         # Basic environment variables Claude Code might need
         "HOME": os.getenv("HOME"),
         "USER": os.getenv("USER"),
@@ -118,13 +128,13 @@ def get_claude_env() -> Dict[str, str]:
         "SHELL": os.getenv("SHELL"),
         "TERM": os.getenv("TERM"),
     }
-    
+
     # Only add GitHub tokens if GITHUB_PAT exists
     github_pat = os.getenv("GITHUB_PAT")
     if github_pat:
         required_env_vars["GITHUB_PAT"] = github_pat
         required_env_vars["GH_TOKEN"] = github_pat  # Claude Code uses GH_TOKEN
-    
+
     # Filter out None values
     return {k: v for k, v in required_env_vars.items() if v is not None}
 

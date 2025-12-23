@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git remote remove:*)",
+      "Bash(git init:*)",
+      "Bash(test -f:*)",
+      "Bash(git push:*)",
+      "Bash(sh:*)",
+      "Bash(where:*)",
+      "Bash(gh:*)",
+      "Bash(\"C:\\\\Users\\\\User\\\\.local\\\\bin\\\\claude.exe\" --version)",
+      "Bash(\"C:\\\\Users\\\\User\\\\.local\\\\bin\\\\claude.exe\" -p \"What is 2+2? Just respond with the number, nothing else.\" --model claude-3-5-haiku-20241022 --output-format stream-json --dangerously-skip-permissions)",
+      "Bash(\"C:\\\\Users\\\\User\\\\.local\\\\bin\\\\claude.exe\" -p \"What is 2+2? Just respond with the number, nothing else.\" --model claude-3-5-haiku-20241022 --output-format stream-json --verbose --dangerously-skip-permissions)",
+      "Bash(winget install:*)",
+      "Bash(cmd /c \"gh auth login\")",
+      "Bash(\"C:/Program Files/GitHub CLI/gh.exe\" auth login)",
+      "Bash(\"C:/Program Files/GitHub CLI/gh.exe\" --version)",
+      "Bash(\"C:/Program Files/GitHub CLI/gh.exe\" auth status)",
+      "Bash(echo:*)",
+      "Bash(\"C:/Program Files/GitHub CLI/gh.exe\" api user -q .login)",
+      "Bash(set -a)",
+      "Bash(source .env)",
+      "Bash(python:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [],
+    "PostToolUse": [],
+    "Notification": [],
+    "Stop": [],
+    "SubagentStop": []
+  }
+}

@@ -21,31 +21,79 @@ from typing import Dict, List, Optional
 from data_types import GitHubIssue, GitHubIssueListItem
 
 
-def get_github_env() -> Optional[dict]:
-    """Get environment with GitHub token set up. Returns None if no GITHUB_PAT.
-    
-    Subprocess env behavior:
-    - env=None → Inherits parent's environment (default)
-    - env={} → Empty environment (no variables)
-    - env=custom_dict → Only uses specified variables
-    
-    So this will work with gh authentication:
-    # These are equivalent:
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    result = subprocess.run(cmd, capture_output=True, text=True, env=None)
-    
-    But this will NOT work (no PATH, no auth):
-    result = subprocess.run(cmd, capture_output=True, text=True, env={})
+def is_wsl() -> bool:
+    """Check if running inside WSL."""
+    try:
+        with open("/proc/version", "r") as f:
+            return "microsoft" in f.read().lower()
+    except FileNotFoundError:
+        return False
+
+
+def get_gh_path() -> str:
+    """Find the GitHub CLI executable path."""
+    # Try 'gh' directly first
+    try:
+        result = subprocess.run(["gh", "--version"], capture_output=True, text=True)
+        if result.returncode == 0:
+            return "gh"
+    except FileNotFoundError:
+        pass
+
+    # On Windows, check common installation paths
+    if sys.platform == "win32":
+        common_paths = [
+            r"C:\Program Files\GitHub CLI\gh.exe",
+            r"C:\Program Files (x86)\GitHub CLI\gh.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Programs\GitHub CLI\gh.exe"),
+        ]
+        for path in common_paths:
+            if os.path.exists(path):
+                return path
+
+    # If running in WSL, try Windows GitHub CLI via /mnt/c path
+    if is_wsl():
+        wsl_windows_paths = [
+            "/mnt/c/Program Files/GitHub CLI/gh.exe",
+            "/mnt/c/Program Files (x86)/GitHub CLI/gh.exe",
+        ]
+        for path in wsl_windows_paths:
+            if os.path.exists(path):
+                return path
+
+    # Fallback to 'gh' and let it fail with proper error
+    return "gh"
+
+
+def get_github_env() -> dict:
+    """Get environment with GitHub token and config set up.
+
+    Returns full environment with GH_TOKEN added if GITHUB_PAT is set,
+    and GH_CONFIG_DIR set to Windows path if running in WSL.
     """
+    env = os.environ.copy()
+
+    # If GITHUB_PAT is set, use it
     github_pat = os.getenv("GITHUB_PAT")
-    if not github_pat:
-        return None
-    
-    # Only create minimal env with GitHub token
-    env = {
-        "GH_TOKEN": github_pat,
-        "PATH": os.environ.get("PATH", ""),
-    }
+    if github_pat:
+        env["GH_TOKEN"] = github_pat
+
+    # If running in WSL, point to Windows gh config
+    if is_wsl():
+        try:
+            # Try to find Windows user from common paths
+            for path in ["/mnt/c/Users"]:
+                if os.path.exists(path):
+                    users = [u for u in os.listdir(path) if u not in ["Public", "Default", "Default User", "All Users"]]
+                    if users:
+                        win_user = users[0]
+                        gh_config = f"/mnt/c/Users/{win_user}/AppData/Roaming/GitHub CLI"
+                        if os.path.exists(gh_config):
+                            env["GH_CONFIG_DIR"] = gh_config
+                        break
+        except Exception:
+            pass
+
     return env
 
 
@@ -75,9 +123,10 @@ def extract_repo_path(github_url: str) -> str:
 
 def fetch_issue(issue_number: str, repo_path: str) -> GitHubIssue:
     """Fetch GitHub issue using gh CLI and return typed model."""
+    gh = get_gh_path()
     # Use JSON output for structured data
     cmd = [
-        "gh",
+        gh,
         "issue",
         "view",
         issue_number,
@@ -122,13 +171,14 @@ def fetch_issue(issue_number: str, repo_path: str) -> GitHubIssue:
 
 def make_issue_comment(issue_id: str, comment: str) -> None:
     """Post a comment to a GitHub issue using gh CLI."""
+    gh = get_gh_path()
     # Get repo information from git remote
     github_repo_url = get_repo_url()
     repo_path = extract_repo_path(github_repo_url)
 
     # Build command
     cmd = [
-        "gh",
+        gh,
         "issue",
         "comment",
         issue_id,
@@ -156,13 +206,14 @@ def make_issue_comment(issue_id: str, comment: str) -> None:
 
 def mark_issue_in_progress(issue_id: str) -> None:
     """Mark issue as in progress by adding label and comment."""
+    gh = get_gh_path()
     # Get repo information from git remote
     github_repo_url = get_repo_url()
     repo_path = extract_repo_path(github_repo_url)
 
     # Add "in_progress" label
     cmd = [
-        "gh",
+        gh,
         "issue",
         "edit",
         issue_id,
@@ -185,7 +236,7 @@ def mark_issue_in_progress(issue_id: str) -> None:
 
     # Assign to self (optional)
     cmd = [
-        "gh",
+        gh,
         "issue",
         "edit",
         issue_id,
@@ -201,9 +252,10 @@ def mark_issue_in_progress(issue_id: str) -> None:
 
 def fetch_open_issues(repo_path: str) -> List[GitHubIssueListItem]:
     """Fetch all open issues from the GitHub repository."""
+    gh = get_gh_path()
     try:
         cmd = [
-            "gh",
+            gh,
             "issue",
             "list",
             "--repo",
@@ -239,9 +291,10 @@ def fetch_open_issues(repo_path: str) -> List[GitHubIssueListItem]:
 
 def fetch_issue_comments(repo_path: str, issue_number: int) -> List[Dict]:
     """Fetch all comments for a specific issue."""
+    gh = get_gh_path()
     try:
         cmd = [
-            "gh",
+            gh,
             "issue",
             "view",
             str(issue_number),
